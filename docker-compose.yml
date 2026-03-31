@@ -4,7 +4,13 @@ services:
   anki-sync:
     build: .
     env_file: .env
+    environment:
+      - OUTPUT_DIR=/output
+      - ANKI_COLLECTION_PATH=/collection
     volumes:
       - ./output:/output
-    # Restart policy for scheduled use; remove if running ad-hoc
+      - anki-collection:/collection   # persistent collection for ankiweb backend
     restart: "no"
+
+volumes:
+  anki-collection:   # survives container rebuilds; only diffs synced to AnkiWeb each run
