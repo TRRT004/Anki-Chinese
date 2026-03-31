@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  anki-sync:
+    build: .
+    env_file: .env
+    volumes:
+      - ./output:/output
+    # Restart policy for scheduled use; remove if running ad-hoc
+    restart: "no"
