@@ -1,0 +1,4 @@
+# Notion → Anki sync — runs at 05:00 UTC every day
+# Logs stream directly to `docker logs` via /proc/1/fd/1
+0 5 * * * root . /etc/environment ; cd /app && python sync.py >> /proc/1/fd/1 2>&1
+
