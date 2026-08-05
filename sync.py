@@ -434,12 +434,23 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			audio_filename = f"zh_{row['id']}.mp3"
 			audio_path = media_dir / audio_filename
 
-			if not audio_path.exists():
-				log.info("Generating audio for '%s' -> %s", row["chinese"], audio_filename)
-				try:
-					asyncio.run(tts_download(row["chinese"], str(audio_path.resolve())))
-				except Exception as tts_exc:
-					log.error("Failed to generate TTS audio for '%s': %s", row["chinese"], tts_exc)
+			if not col.media.have(audio_filename):
+				if audio_path.exists():
+					log.info("Registering existing audio file in database: %s", audio_filename)
+					try:
+						col.media.add_file(str(audio_path.resolve()))
+					except Exception as add_exc:
+						log.error("Failed to register existing audio: %s", add_exc)
+				else:
+					log.info("Generating audio for '%s' -> %s", row["chinese"], audio_filename)
+					try:
+						temp_path = Path("/tmp") / audio_filename
+						asyncio.run(tts_download(row["chinese"], str(temp_path.resolve())))
+						col.media.add_file(str(temp_path.resolve()))
+						if temp_path.exists():
+							temp_path.unlink()
+					except Exception as tts_exc:
+						log.error("Failed to generate TTS audio for '%s': %s", row["chinese"], tts_exc)
 
 			note_ids = col.db.list("select id from notes where guid = ?", guid)
 			
@@ -487,17 +498,17 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		# Cleanup orphaned media files (zh_*.mp3 no longer in the active Notion rows)
 		log.info("Checking for orphaned media files…")
 		active_files = {f"zh_{row['id']}.mp3" for row in rows}
-		deleted_media_count = 0
+		orphaned_files = []
 		for media_file in media_dir.glob("zh_*.mp3"):
 			if media_file.name not in active_files:
-				log.info("Deleting orphaned media file: %s", media_file.name)
-				try:
-					media_file.unlink()
-					deleted_media_count += 1
-				except Exception as del_exc:
-					log.error("Failed to delete orphaned media %s: %s", media_file.name, del_exc)
-		if deleted_media_count > 0:
-			log.info("Cleaned up %d orphaned media files.", deleted_media_count)
+				orphaned_files.append(media_file.name)
+		
+		if orphaned_files:
+			log.info("Trashing %d orphaned media files from database...", len(orphaned_files))
+			try:
+				col.media.trash_files(orphaned_files)
+			except Exception as trash_exc:
+				log.error("Failed to trash orphaned media: %s", trash_exc)
 
 		# Sync UP to AnkiWeb
 		log.info("Syncing collection back to AnkiWeb…")
