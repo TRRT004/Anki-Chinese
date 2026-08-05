@@ -213,9 +213,9 @@ def _make_model() -> genanki.Model:
 	)
 
 
-def _stable_guid(notion_id: str) -> int:
-	"""Deterministic integer GUID from a Notion page ID (ensures idempotent updates)."""
-	return int(hashlib.md5(notion_id.encode()).hexdigest()[:8], 16)
+def _stable_guid(notion_id: str) -> str:
+	"""Deterministic Anki GUID derived from a Notion page ID."""
+	return genanki.guid_for(notion_id)
 
 
 def build_deck(rows: list[dict]) -> genanki.Deck:
@@ -244,15 +244,13 @@ def build_deck(rows: list[dict]) -> genanki.Deck:
 
 # ── Upload backends ────────────────────────────────────────────────────────────
 
-def upload_ankiweb(file_path: Path, filename: str) -> str:
+def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | None:
 	"""
-	Import the .apkg into a persistent local collection, then sync it to AnkiWeb.
-	Uses the official `anki` Python package — no Anki desktop or Qt required.
-	The collection is stored in ANKI_COLLECTION_PATH (a Docker volume) so state
-	is preserved across runs and only diffs are sent on subsequent syncs.
+	Sync down from AnkiWeb, append/update Notion rows directly to the persistent local collection,
+	and sync back up to AnkiWeb. Avoids importing .apkg which triggers full-sync/schema change prompts.
 	"""
 	import anki.lang
-	from anki.collection import Collection, ImportAnkiPackageRequest
+	from anki.collection import Collection
 	from anki.sync import SyncOutput
 
 	if not ANKIWEB_USERNAME or not ANKIWEB_PASSWORD:
@@ -269,13 +267,6 @@ def upload_ankiweb(file_path: Path, filename: str) -> str:
 	log.info("Opening collection at %s", col_path)
 	col = Collection(col_path)
 	try:
-		# Import via the modern API — updates existing notes via stable GUIDs, no duplicates
-		log.info("Importing %s into collection…", filename)
-		col.import_anki_package(
-			ImportAnkiPackageRequest(package_path=str(file_path.resolve()))
-		)
-		log.info("Import done")
-
 		# Login to AnkiWeb
 		log.info("Logging in to AnkiWeb as %s…", ANKIWEB_USERNAME)
 		auth = col.sync_login(
@@ -284,16 +275,112 @@ def upload_ankiweb(file_path: Path, filename: str) -> str:
 			endpoint=None,
 		)
 
-		# Sync — handle all three outcomes AnkiWeb can return
-		log.info("Syncing collection to AnkiWeb…")
+		# Sync DOWN first (normal incremental sync)
+		log.info("Syncing down from AnkiWeb…")
+		sync_result = col.sync_collection(auth=auth, sync_media=False)
+		
+		# If a full sync was requested by AnkiWeb during pull, download it
+		if sync_result.required in (SyncOutput.FULL_SYNC, SyncOutput.FULL_UPLOAD):
+			log.info("Full sync required by AnkiWeb during pull — downloading entire collection…")
+			if sync_result.new_endpoint:
+				auth.endpoint = sync_result.new_endpoint
+			col.close_for_full_sync()
+			col.full_upload_or_download(
+				auth=auth,
+				server_usn=sync_result.server_usn,
+				upload=False,
+			)
+			log.info("Full download complete, reopening collection…")
+			col = Collection(col_path) # reopen
+
+		# Get or create note model
+		model = col.models.by_name(MODEL_NAME)
+		if not model:
+			log.info("Creating new model %s in collection…", MODEL_NAME)
+			model = col.models.new(MODEL_NAME)
+			for field_name in ["Chinese", "Pinyin", "Meaning", "Type", "Notes"]:
+				fld = col.models.new_field(field_name)
+				col.models.add_field(model, fld)
+			
+			t1 = col.models.new_template("Recognition")
+			t1["qfmt"] = "<div class='chinese'>{{Chinese}}</div>"
+			t1["afmt"] = (
+				"{{FrontSide}}<hr>"
+				"<div class='pinyin'>{{Pinyin}}</div>"
+				"<div class='meaning'>{{Meaning}}</div>"
+				"<div class='type'>{{Type}}</div>"
+				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+			)
+			col.models.add_template(model, t1)
+
+			t2 = col.models.new_template("Production")
+			t2["qfmt"] = "<div class='meaning'>{{Meaning}}</div>"
+			t2["afmt"] = (
+				"{{FrontSide}}<hr>"
+				"<div class='chinese'>{{Chinese}}</div>"
+				"<div class='pinyin'>{{Pinyin}}</div>"
+				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+			)
+			col.models.add_template(model, t2)
+			
+			model["css"] = _CSS
+			col.models.add(model)
+			model = col.models.by_name(MODEL_NAME)
+
+		# Ensure deck exists
+		deck_id = col.decks.id(DECK_NAME)
+
+		log.info("Adding/updating %d notes directly in collection…", len(rows))
+		added_count = 0
+		updated_count = 0
+		for row in rows:
+			guid = _stable_guid(row["id"])
+			note_ids = col.db.list("select id from notes where guid = ?", guid)
+			
+			fields = [
+				row["chinese"],
+				row["pinyin"],
+				row["meaning"],
+				row["type"],
+				row["notes"],
+			]
+			
+			if note_ids:
+				note = col.get_note(note_ids[0])
+				changed = False
+				for i, val in enumerate(fields):
+					if note.fields[i] != val:
+						note.fields[i] = val
+						changed = True
+				
+				# Check tags
+				new_tags = col.tags.canonify(row["tags"])
+				if sorted(note.tags) != sorted(new_tags):
+					note.tags = new_tags
+					changed = True
+				
+				if changed:
+					col.update_note(note)
+					updated_count += 1
+			else:
+				note = col.new_note(model)
+				note.guid = guid
+				for i, val in enumerate(fields):
+					note.fields[i] = val
+				note.tags = col.tags.canonify(row["tags"])
+				col.add_note(note, deck_id)
+				added_count += 1
+		
+		log.info("Finished notes sync. Added: %d, Updated: %d", added_count, updated_count)
+
+		# Sync UP to AnkiWeb
+		log.info("Syncing collection back to AnkiWeb…")
 		sync_result = col.sync_collection(auth=auth, sync_media=False)
 
 		if sync_result.required == SyncOutput.NO_CHANGES:
 			log.info("AnkiWeb already up to date — no changes to push")
 
 		elif sync_result.required in (SyncOutput.FULL_SYNC, SyncOutput.FULL_UPLOAD):
-			# First sync or AnkiWeb explicitly requesting upload: send entire collection.
-			# AnkiWeb routes accounts to specific servers — use the endpoint it returned.
 			if sync_result.new_endpoint:
 				auth.endpoint = sync_result.new_endpoint
 				log.info("Using sync endpoint: %s", sync_result.new_endpoint)
@@ -307,7 +394,6 @@ def upload_ankiweb(file_path: Path, filename: str) -> str:
 			log.info("Full upload complete")
 
 		else:
-			# NORMAL_SYNC — incremental diff already applied by sync_collection
 			log.info("Normal sync complete")
 
 		log.info("AnkiWeb account: %s — open Anki on any device and sync to receive updates", ANKIWEB_USERNAME)
@@ -318,7 +404,7 @@ def upload_ankiweb(file_path: Path, filename: str) -> str:
 		except Exception:
 			pass
 
-	return None  # no download URL — devices pull from AnkiWeb on their next sync
+	return None
 
 
 def upload_github(file_path: Path, filename: str) -> str:
@@ -381,7 +467,7 @@ def upload_github(file_path: Path, filename: str) -> str:
 	return url
 
 
-def upload_apkg(file_path: Path, filename: str) -> list[str | None]:
+def upload_apkg(file_path: Path, filename: str, rows: list[dict]) -> list[str | None]:
 	"""Upload to every enabled backend. Returns list of URLs."""
 	active = UPLOAD_BACKENDS - {"none"}
 	if not active:
@@ -397,7 +483,7 @@ def upload_apkg(file_path: Path, filename: str) -> list[str | None]:
 	if "github" in active:
 		urls.append(upload_github(file_path, filename))
 	if "ankiweb" in active:
-		urls.append(upload_ankiweb(file_path, filename))
+		urls.append(upload_ankiweb(file_path, filename, rows))
 	return urls
 
 
@@ -432,7 +518,7 @@ def main() -> None:
 
 	# 5. Upload to cloud
 	try:
-		urls = upload_apkg(out_path, filename)
+		urls = upload_apkg(out_path, filename, rows)
 		for url in urls:
 			if url:
 				log.info("Deck available at: %s", url)
