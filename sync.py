@@ -319,8 +319,9 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			status = col._backend.media_sync_status()
 			if not status.active:
 				break
-			if status.progress:
-				log.info("Media sync progress: %s", status.progress.replace("\n", " | "))
+			progress_str = str(status.progress).strip().replace("\n", " | ")
+			if progress_str:
+				log.info("Media sync progress: %s", progress_str)
 			time.sleep(0.5)
 		log.info("Media sync complete.")
 
