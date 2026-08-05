@@ -191,7 +191,7 @@ _COLORIZER_SCRIPT = """
 	var tone2 = /[áéíóúǘ]/i;
 	var tone3 = /[ǎěǐǒǔǚ]/i;
 	var tone4 = /[àèìòùǜ]/i;
-	var regex = /([bcdfghjklmnpqrstwz]?[h]?[aeiouvüāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜvü]{1,3}(?:ng|n|r)?)/gi;
+	var regex = /([bcdfghjklmnpqrstwxyz]?[h]?[aeiouvüāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜvü]{1,3}(?:ng|n|r)?)/gi;
 
 	els.forEach(function(el) {
 		if (el.dataset.colorized) return;
@@ -436,7 +436,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		media_dir.mkdir(parents=True, exist_ok=True)
 
 		async def tts_download(text, path):
-			communicate = edge_tts.Communicate(text, "zh-CN-XiaoyiNeural")
+			communicate = edge_tts.Communicate(text, "zh-CN-YunyangNeural")
 			await communicate.save(path)
 
 		log.info("Adding/updating %d notes directly in collection…", len(rows))
