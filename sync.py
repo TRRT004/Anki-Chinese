@@ -291,7 +291,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				upload=False,
 			)
 			log.info("Full download complete, reopening collection…")
-			col = Collection(col_path) # reopen
+			col.reopen(after_full_sync=True)
 
 		# Get or create note model
 		model = col.models.by_name(MODEL_NAME)
