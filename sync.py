@@ -176,6 +176,38 @@ _CSS = """
 .notes     { font-size: 15px; color: #666; font-style: italic; margin-top: 10px;
 			 border-top: 1px solid #ddd; padding-top: 8px; }
 hr         { border: none; border-top: 1px solid #ddd; margin: 14px 0; }
+.tone1     { color: #ff4d4f; font-weight: bold; }
+.tone2     { color: #52c41a; font-weight: bold; }
+.tone3     { color: #1890ff; font-weight: bold; }
+.tone4     { color: #9254de; font-weight: bold; }
+.tone5     { color: #8c8c8c; }
+"""
+
+_COLORIZER_SCRIPT = """
+<script>
+(function() {
+	var els = document.querySelectorAll('.pinyin');
+	var tone1 = /[āēīōūǖ]/i;
+	var tone2 = /[áéíóúǘ]/i;
+	var tone3 = /[ǎěǐǒǔǚ]/i;
+	var tone4 = /[àèìòùǜ]/i;
+	var regex = /([bcdfghjklmnpqrstwz]?[h]?[aeiouvüāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜvü]{1,3}(?:ng|n|r)?)/gi;
+
+	els.forEach(function(el) {
+		if (el.dataset.colorized) return;
+		var text = el.innerHTML;
+		el.innerHTML = text.replace(regex, function(syllable) {
+			var tone = 5;
+			if (tone1.test(syllable)) tone = 1;
+			else if (tone2.test(syllable)) tone = 2;
+			else if (tone3.test(syllable)) tone = 3;
+			else if (tone4.test(syllable)) tone = 4;
+			return '<span class="tone' + tone + '">' + syllable + '</span>';
+		});
+		el.dataset.colorized = 'true';
+	});
+})();
+</script>
 """
 
 def _make_model() -> genanki.Model:
@@ -205,6 +237,7 @@ def _make_model() -> genanki.Model:
 					"<div class='type'>{{Type}}</div>"
 					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
 					f"{audio_back}"
+					f"{_COLORIZER_SCRIPT}"
 				),
 			},
 			{
@@ -217,6 +250,7 @@ def _make_model() -> genanki.Model:
 					"<div class='pinyin'>{{Pinyin}}</div>"
 					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
 					f"{audio_back}"
+					f"{_COLORIZER_SCRIPT}"
 				),
 			},
 		],
@@ -326,6 +360,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				"<div class='type'>{{Type}}</div>"
 				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
 				f"{audio_back}"
+				f"{_COLORIZER_SCRIPT}"
 			)
 			col.models.add_template(model, t1)
 
@@ -337,6 +372,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				"<div class='pinyin'>{{Pinyin}}</div>"
 				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
 				f"{audio_back}"
+				f"{_COLORIZER_SCRIPT}"
 			)
 			col.models.add_template(model, t2)
 			
@@ -351,28 +387,32 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				fld = col.models.new_field("Audio")
 				col.models.add_field(model, fld)
 				
-				# Get templates
-				t1 = model["tmpls"][0]
-				t1["qfmt"] = f"<div class='chinese'>{{{{Chinese}}}}</div>{audio_front}"
-				t1["afmt"] = (
-					"{{FrontSide}}<hr>"
-					"<div class='pinyin'>{{Pinyin}}</div>"
-					"<div class='meaning'>{{Meaning}}</div>"
-					"<div class='type'>{{Type}}</div>"
-					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
-					f"{audio_back}"
-				)
-				
-				t2 = model["tmpls"][1]
-				t2["qfmt"] = f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}"
-				t2["afmt"] = (
-					"{{FrontSide}}<hr>"
-					"<div class='chinese'>{{Chinese}}</div>"
-					"<div class='pinyin'>{{Pinyin}}</div>"
-					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
-					f"{audio_back}"
-				)
-				col.models.save(model)
+			# Unconditionally sync templates and CSS with tone colorizer
+			log.info("Updating existing model templates and CSS rules…")
+			t1 = model["tmpls"][0]
+			t1["qfmt"] = f"<div class='chinese'>{{{{Chinese}}}}</div>{audio_front}"
+			t1["afmt"] = (
+				"{{FrontSide}}<hr>"
+				"<div class='pinyin'>{{Pinyin}}</div>"
+				"<div class='meaning'>{{Meaning}}</div>"
+				"<div class='type'>{{Type}}</div>"
+				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+				f"{audio_back}"
+				f"{_COLORIZER_SCRIPT}"
+			)
+			
+			t2 = model["tmpls"][1]
+			t2["qfmt"] = f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}"
+			t2["afmt"] = (
+				"{{FrontSide}}<hr>"
+				"<div class='chinese'>{{Chinese}}</div>"
+				"<div class='pinyin'>{{Pinyin}}</div>"
+				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+				f"{audio_back}"
+				f"{_COLORIZER_SCRIPT}"
+			)
+			model["css"] = _CSS
+			col.models.save(model)
 
 		# Ensure deck exists
 		deck_id = col.decks.id(DECK_NAME)
@@ -443,6 +483,21 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				added_count += 1
 		
 		log.info("Finished notes sync. Added: %d, Updated: %d", added_count, updated_count)
+
+		# Cleanup orphaned media files (zh_*.mp3 no longer in the active Notion rows)
+		log.info("Checking for orphaned media files…")
+		active_files = {f"zh_{row['id']}.mp3" for row in rows}
+		deleted_media_count = 0
+		for media_file in media_dir.glob("zh_*.mp3"):
+			if media_file.name not in active_files:
+				log.info("Deleting orphaned media file: %s", media_file.name)
+				try:
+					media_file.unlink()
+					deleted_media_count += 1
+				except Exception as del_exc:
+					log.error("Failed to delete orphaned media %s: %s", media_file.name, del_exc)
+		if deleted_media_count > 0:
+			log.info("Cleaned up %d orphaned media files.", deleted_media_count)
 
 		# Sync UP to AnkiWeb
 		log.info("Syncing collection back to AnkiWeb…")
