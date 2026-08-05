@@ -467,6 +467,18 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 						log.error("Failed to generate TTS audio for '%s': %s", row["chinese"], tts_exc)
 
 			note_ids = col.db.list("select id from notes where guid = ?", guid)
+			if not note_ids:
+				matching_ids = col.db.list(
+					"select id from notes where flds = ? or flds like ?",
+					row["chinese"],
+					row["chinese"] + "\x1f%"
+				)
+				if matching_ids:
+					note_ids = [matching_ids[0]]
+					old_note = col.get_note(matching_ids[0])
+					log.info("Migrating GUID of old note '%s': %s -> %s", row["chinese"], old_note.guid, guid)
+					old_note.guid = guid
+					col.update_note(old_note)
 			
 			fields = [
 				row["chinese"],
