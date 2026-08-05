@@ -2,3 +2,4 @@ requests==2.32.3
 genanki==0.13.0
 python-dotenv==1.0.1
 anki==25.9.2
+edge-tts

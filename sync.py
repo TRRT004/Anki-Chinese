@@ -5,13 +5,16 @@ Fetches vocabulary from a Notion database, builds a genanki .apkg deck,
 and uploads it to a cloud backend (S3 or GitHub Releases).
 """
 
+import asyncio
 import hashlib
 import logging
 import os
+import signal
 import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
+import edge_tts
 
 import genanki
 import requests
@@ -57,6 +60,7 @@ ANKI_COLLECTION_PATH    = os.getenv("ANKI_COLLECTION_PATH", "./collection")
 NOTION_VERSION  = "2022-06-28"
 DECK_NAME       = "ChineseVocab"
 MODEL_NAME      = "ChineseVocabModel"
+AUDIO_PLACEMENT = os.getenv("AUDIO_PLACEMENT", "both").lower()  # front, back, both
 
 # Stable integer IDs derived from names so re-runs never create duplicates
 MODEL_ID = int(hashlib.md5(MODEL_NAME.encode()).hexdigest()[:8], 16)
@@ -175,6 +179,9 @@ hr         { border: none; border-top: 1px solid #ddd; margin: 14px 0; }
 """
 
 def _make_model() -> genanki.Model:
+	audio_front = "{{Audio}}" if AUDIO_PLACEMENT in ("front", "both") else ""
+	audio_back = "{{Audio}}" if AUDIO_PLACEMENT in ("back", "both") else ""
+
 	return genanki.Model(
 		MODEL_ID,
 		MODEL_NAME,
@@ -184,29 +191,32 @@ def _make_model() -> genanki.Model:
 			{"name": "Meaning"},
 			{"name": "Type"},
 			{"name": "Notes"},
+			{"name": "Audio"},
 		],
 		templates=[
 			{
 				# Recognition: see the character → recall meaning
 				"name": "Recognition",
-				"qfmt": "<div class='chinese'>{{Chinese}}</div>",
+				"qfmt": f"<div class='chinese'>{{{{Chinese}}}}</div>{audio_front}",
 				"afmt": (
 					"{{FrontSide}}<hr>"
 					"<div class='pinyin'>{{Pinyin}}</div>"
 					"<div class='meaning'>{{Meaning}}</div>"
 					"<div class='type'>{{Type}}</div>"
 					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+					f"{audio_back}"
 				),
 			},
 			{
 				# Production: see the meaning → recall the character
 				"name": "Production",
-				"qfmt": "<div class='meaning'>{{Meaning}}</div>",
+				"qfmt": f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}",
 				"afmt": (
 					"{{FrontSide}}<hr>"
 					"<div class='chinese'>{{Chinese}}</div>"
 					"<div class='pinyin'>{{Pinyin}}</div>"
 					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+					f"{audio_back}"
 				),
 			},
 		],
@@ -232,6 +242,7 @@ def build_deck(rows: list[dict]) -> genanki.Deck:
 				row["meaning"],
 				row["type"],
 				row["notes"],
+				f"[sound:zh_{row['id']}.mp3]",
 			],
 			tags=row["tags"],
 			guid=_stable_guid(row["id"]),
@@ -294,48 +305,102 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			log.info("Full download complete, reopening collection…")
 			col.reopen(after_full_sync=True)
 
+		audio_front = "{{Audio}}" if AUDIO_PLACEMENT in ("front", "both") else ""
+		audio_back = "{{Audio}}" if AUDIO_PLACEMENT in ("back", "both") else ""
+
 		# Get or create note model
 		model = col.models.by_name(MODEL_NAME)
 		if not model:
 			log.info("Creating new model %s in collection…", MODEL_NAME)
 			model = col.models.new(MODEL_NAME)
-			for field_name in ["Chinese", "Pinyin", "Meaning", "Type", "Notes"]:
+			for field_name in ["Chinese", "Pinyin", "Meaning", "Type", "Notes", "Audio"]:
 				fld = col.models.new_field(field_name)
 				col.models.add_field(model, fld)
 			
 			t1 = col.models.new_template("Recognition")
-			t1["qfmt"] = "<div class='chinese'>{{Chinese}}</div>"
+			t1["qfmt"] = f"<div class='chinese'>{{{{Chinese}}}}</div>{audio_front}"
 			t1["afmt"] = (
 				"{{FrontSide}}<hr>"
 				"<div class='pinyin'>{{Pinyin}}</div>"
 				"<div class='meaning'>{{Meaning}}</div>"
 				"<div class='type'>{{Type}}</div>"
 				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+				f"{audio_back}"
 			)
 			col.models.add_template(model, t1)
 
 			t2 = col.models.new_template("Production")
-			t2["qfmt"] = "<div class='meaning'>{{Meaning}}</div>"
+			t2["qfmt"] = f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}"
 			t2["afmt"] = (
 				"{{FrontSide}}<hr>"
 				"<div class='chinese'>{{Chinese}}</div>"
 				"<div class='pinyin'>{{Pinyin}}</div>"
 				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+				f"{audio_back}"
 			)
 			col.models.add_template(model, t2)
 			
 			model["css"] = _CSS
 			col.models.add(model)
 			model = col.models.by_name(MODEL_NAME)
+		else:
+			# Check if "Audio" field is in model
+			field_names = [f["name"] for f in model["flds"]]
+			if "Audio" not in field_names:
+				log.info("Updating existing model to add Audio field...")
+				fld = col.models.new_field("Audio")
+				col.models.add_field(model, fld)
+				
+				# Get templates
+				t1 = model["tmpls"][0]
+				t1["qfmt"] = f"<div class='chinese'>{{{{Chinese}}}}</div>{audio_front}"
+				t1["afmt"] = (
+					"{{FrontSide}}<hr>"
+					"<div class='pinyin'>{{Pinyin}}</div>"
+					"<div class='meaning'>{{Meaning}}</div>"
+					"<div class='type'>{{Type}}</div>"
+					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+					f"{audio_back}"
+				)
+				
+				t2 = model["tmpls"][1]
+				t2["qfmt"] = f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}"
+				t2["afmt"] = (
+					"{{FrontSide}}<hr>"
+					"<div class='chinese'>{{Chinese}}</div>"
+					"<div class='pinyin'>{{Pinyin}}</div>"
+					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
+					f"{audio_back}"
+				)
+				col.models.save(model)
 
 		# Ensure deck exists
 		deck_id = col.decks.id(DECK_NAME)
+
+		# Ensure media folder exists
+		media_dir = col_dir / "collection.media"
+		media_dir.mkdir(parents=True, exist_ok=True)
+
+		async def tts_download(text, path):
+			communicate = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
+			await communicate.save(path)
 
 		log.info("Adding/updating %d notes directly in collection…", len(rows))
 		added_count = 0
 		updated_count = 0
 		for row in rows:
 			guid = _stable_guid(row["id"])
+			
+			audio_filename = f"zh_{row['id']}.mp3"
+			audio_path = media_dir / audio_filename
+
+			if not audio_path.exists():
+				log.info("Generating audio for '%s' -> %s", row["chinese"], audio_filename)
+				try:
+					asyncio.run(tts_download(row["chinese"], str(audio_path.resolve())))
+				except Exception as tts_exc:
+					log.error("Failed to generate TTS audio for '%s': %s", row["chinese"], tts_exc)
+
 			note_ids = col.db.list("select id from notes where guid = ?", guid)
 			
 			fields = [
@@ -344,10 +409,15 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				row["meaning"],
 				row["type"],
 				row["notes"],
+				f"[sound:{audio_filename}]",
 			]
 			
 			if note_ids:
 				note = col.get_note(note_ids[0])
+				# Ensure fields array is padded to schema size
+				while len(note.fields) < len(model["flds"]):
+					note.fields.append("")
+					
 				changed = False
 				for i, val in enumerate(fields):
 					if note.fields[i] != val:
@@ -575,6 +645,17 @@ def run_once() -> None:
 
 def run_daemon() -> None:
 	log.info("=== Anki Sync Daemon Started ===")
+
+	# Register signal handlers for graceful shutdown
+	def handle_shutdown(signum, frame):
+		log.info("Received signal %d. Shutting down gracefully…", signum)
+		sys.exit(0)
+
+	signal.signal(signal.SIGTERM, handle_shutdown)
+	signal.signal(signal.SIGINT, handle_shutdown)
+
+	last_successful_sync_date = None
+
 	while True:
 		log.info("Checking AnkiWeb for the latest deck reset time…")
 		try:
@@ -588,20 +669,41 @@ def run_daemon() -> None:
 		# Sync 10 minutes before the daily reset window
 		target_time = day_cutoff - 600
 
-		if now >= target_time:
-			log.info("Current time is within the daily reset window. Running sync…")
-			try:
-				run_once()
-			except Exception as exc:
-				log.error("Sync failed: %s", exc)
-			# Sleep 15 minutes to prevent hot looping in the same window
-			time.sleep(900)
-			continue
+		# Format target time for logs in local and UTC
+		try:
+			# Use timezone-aware UTC datetime
+			from datetime import timezone
+			target_dt_utc = datetime.fromtimestamp(target_time, timezone.utc)
+		except ImportError:
+			# Fallback if timezone not available in older python
+			target_dt_utc = datetime.utcfromtimestamp(target_time)
+		target_dt_local = datetime.fromtimestamp(target_time)
 
-		# Sleep until the target time, but check every 4 hours to verify if the setting has changed
+		today_str = date.today().isoformat()
+		if now >= target_time:
+			if last_successful_sync_date != today_str:
+				log.info("Current time is within the daily reset window and today's sync has not completed yet. Running sync…")
+				try:
+					run_once()
+					last_successful_sync_date = today_str
+					log.info("Daily sync succeeded. Next sync scheduled for tomorrow's window.")
+					# Sleep 15 minutes to prevent hot looping in the same window
+					time.sleep(900)
+					continue
+				except Exception as exc:
+					log.error("Daily sync failed: %s. Retrying in 15 minutes…", exc)
+					time.sleep(900)
+					continue
+			else:
+				# Already synced successfully today, sleep until the next day cutoff check
+				log.info("Already synced successfully today (%s). Checking again in 4 hours...", today_str)
+				time.sleep(4 * 3600)
+				continue
+
+		# Sleep until the target time, but check every 4 hours to verify if the setting has changed on AnkiWeb
 		sleep_seconds = min(target_time - now, 4 * 3600)
-		log.info("Sleeping for %d seconds (Next sync target: %s)", 
-				 sleep_seconds, datetime.fromtimestamp(target_time).isoformat())
+		log.info("Sleeping for %d seconds (Next sync target: %s UTC / %s Local)", 
+				 sleep_seconds, target_dt_utc.isoformat(), target_dt_local.isoformat())
 		time.sleep(sleep_seconds)
 
 
