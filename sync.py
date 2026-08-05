@@ -312,6 +312,18 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 
 	log.info("Opening collection at %s", col_path)
 	col = Collection(col_path)
+
+	def _wait_for_media_sync(col):
+		log.info("Waiting for media sync to finish...")
+		while True:
+			status = col._backend.media_sync_status()
+			if not status.active:
+				break
+			if status.progress:
+				log.info("Media sync progress: %s", status.progress.replace("\n", " | "))
+			time.sleep(0.5)
+		log.info("Media sync complete.")
+
 	try:
 		# Login to AnkiWeb
 		log.info("Logging in to AnkiWeb as %s…", ANKIWEB_USERNAME)
@@ -324,6 +336,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		# Sync DOWN first (normal incremental sync)
 		log.info("Syncing down from AnkiWeb…")
 		sync_result = col.sync_collection(auth=auth, sync_media=True)
+		_wait_for_media_sync(col)
 		
 		# If a full sync was requested by AnkiWeb during pull, download it
 		if sync_result.required in (SyncOutput.FULL_SYNC, SyncOutput.FULL_UPLOAD):
@@ -513,6 +526,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		# Sync UP to AnkiWeb
 		log.info("Syncing collection back to AnkiWeb…")
 		sync_result = col.sync_collection(auth=auth, sync_media=True)
+		_wait_for_media_sync(col)
 
 		if sync_result.required == SyncOutput.NO_CHANGES:
 			log.info("AnkiWeb already up to date — no changes to push")
