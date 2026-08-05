@@ -287,7 +287,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			col.close_for_full_sync()
 			col.full_upload_or_download(
 				auth=auth,
-				server_usn=sync_result.server_usn,
+				server_usn=None,
 				upload=False,
 			)
 			log.info("Full download complete, reopening collection…")
