@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   anki-sync:
     build: .
@@ -7,6 +5,7 @@ services:
     environment:
       - OUTPUT_DIR=/output
       - ANKI_COLLECTION_PATH=/collection
+      - RUN_AS_DAEMON=true
     volumes:
       - ./output:/output
       - anki-collection:/collection   # persistent collection for ankiweb backend

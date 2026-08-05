@@ -9,7 +9,8 @@ import hashlib
 import logging
 import os
 import sys
-from datetime import date
+import time
+from datetime import date, datetime
 from pathlib import Path
 
 import genanki
@@ -487,9 +488,52 @@ def upload_apkg(file_path: Path, filename: str, rows: list[dict]) -> list[str | 
 	return urls
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+def get_anki_day_cutoff() -> int:
+	"""
+	Log in to AnkiWeb, sync down to ensure we have the latest collection settings,
+	and return the next daily rollover/reset Unix timestamp (col.sched.day_cutoff).
+	"""
+	import anki.lang
+	from anki.collection import Collection
+	from anki.sync import SyncOutput
 
-def main() -> None:
+	if not ANKIWEB_USERNAME or not ANKIWEB_PASSWORD:
+		log.error("ANKIWEB_USERNAME and ANKIWEB_PASSWORD are required for checking cutoff.")
+		sys.exit(1)
+
+	anki.lang.set_lang("en")
+	col_dir = Path(ANKI_COLLECTION_PATH)
+	col_dir.mkdir(parents=True, exist_ok=True)
+	col_path = str(col_dir / "collection.anki2")
+
+	col = Collection(col_path)
+	try:
+		auth = col.sync_login(
+			username=ANKIWEB_USERNAME,
+			password=ANKIWEB_PASSWORD,
+			endpoint=None,
+		)
+		sync_result = col.sync_collection(auth=auth, sync_media=False)
+		if sync_result.required in (SyncOutput.FULL_SYNC, SyncOutput.FULL_UPLOAD):
+			if sync_result.new_endpoint:
+				auth.endpoint = sync_result.new_endpoint
+			col.close_for_full_sync()
+			col.full_upload_or_download(
+				auth=auth,
+				server_usn=None,
+				upload=False,
+			)
+			col.reopen(after_full_sync=True)
+		
+		return col.sched.day_cutoff
+	finally:
+		try:
+			col.close()
+		except Exception:
+			pass
+
+
+def run_once() -> None:
 	log.info("=== Notion → Anki sync started ===")
 
 	# 1. Fetch all pages from Notion
@@ -527,6 +571,47 @@ def main() -> None:
 		sys.exit(1)
 
 	log.info("=== Sync complete ===")
+
+
+def run_daemon() -> None:
+	log.info("=== Anki Sync Daemon Started ===")
+	while True:
+		log.info("Checking AnkiWeb for the latest deck reset time…")
+		try:
+			day_cutoff = get_anki_day_cutoff()
+		except Exception as exc:
+			log.error("Failed to check AnkiWeb day cutoff: %s. Retrying in 15 minutes…", exc)
+			time.sleep(900)
+			continue
+
+		now = int(time.time())
+		# Sync 10 minutes before the daily reset window
+		target_time = day_cutoff - 600
+
+		if now >= target_time:
+			log.info("Current time is within the daily reset window. Running sync…")
+			try:
+				run_once()
+			except Exception as exc:
+				log.error("Sync failed: %s", exc)
+			# Sleep 15 minutes to prevent hot looping in the same window
+			time.sleep(900)
+			continue
+
+		# Sleep until the target time, but check every 4 hours to verify if the setting has changed
+		sleep_seconds = min(target_time - now, 4 * 3600)
+		log.info("Sleeping for %d seconds (Next sync target: %s)", 
+				 sleep_seconds, datetime.fromtimestamp(target_time).isoformat())
+		time.sleep(sleep_seconds)
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+	if os.getenv("RUN_AS_DAEMON", "").lower() == "true":
+		run_daemon()
+	else:
+		run_once()
 
 
 if __name__ == "__main__":
