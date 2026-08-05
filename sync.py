@@ -323,7 +323,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 
 		# Sync DOWN first (normal incremental sync)
 		log.info("Syncing down from AnkiWeb…")
-		sync_result = col.sync_collection(auth=auth, sync_media=False)
+		sync_result = col.sync_collection(auth=auth, sync_media=True)
 		
 		# If a full sync was requested by AnkiWeb during pull, download it
 		if sync_result.required in (SyncOutput.FULL_SYNC, SyncOutput.FULL_UPLOAD):
@@ -501,7 +501,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 
 		# Sync UP to AnkiWeb
 		log.info("Syncing collection back to AnkiWeb…")
-		sync_result = col.sync_collection(auth=auth, sync_media=False)
+		sync_result = col.sync_collection(auth=auth, sync_media=True)
 
 		if sync_result.required == SyncOutput.NO_CHANGES:
 			log.info("AnkiWeb already up to date — no changes to push")
