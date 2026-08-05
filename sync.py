@@ -436,7 +436,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		media_dir.mkdir(parents=True, exist_ok=True)
 
 		async def tts_download(text, path):
-			communicate = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
+			communicate = edge_tts.Communicate(text, "zh-CN-XiaoyiNeural")
 			await communicate.save(path)
 
 		log.info("Adding/updating %d notes directly in collection…", len(rows))
