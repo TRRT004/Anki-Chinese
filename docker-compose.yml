@@ -8,8 +8,5 @@ services:
       - RUN_AS_DAEMON=true
     volumes:
       - ./output:/output
-      - anki-collection:/collection   # persistent collection for ankiweb backend
+      - ./collection:/collection   # persistent collection for ankiweb backend
     restart: unless-stopped           # survive reboots; stop only on explicit `docker compose down`
-
-volumes:
-  anki-collection:   # survives image rebuilds; only diffs sent to AnkiWeb each run
