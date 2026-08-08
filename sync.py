@@ -574,6 +574,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		updated_count = 0
 		suspended_count = 0
 		unsuspended_count = 0
+		untouched_count = 0
 		for row in rows:
 			guid = _stable_guid(row["id"])
 			
@@ -629,6 +630,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 					old_note.guid = guid
 					col.update_note(old_note)
 			
+			was_unsuspended = False
 			if note_ids:
 				try:
 					# Get only cards of this note that are currently suspended (queue = -1)
@@ -640,6 +642,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 						log.info("Unsuspending note '%s' cards: %s", row["chinese"], suspended_card_ids)
 						col.sched.unsuspend_cards(suspended_card_ids)
 						unsuspended_count += len(suspended_card_ids)
+						was_unsuspended = True
 				except Exception as unsusp_exc:
 					log.error("Failed to unsuspend note '%s': %s", row["chinese"], unsusp_exc)
 
@@ -673,6 +676,8 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				if changed:
 					col.update_note(note)
 					updated_count += 1
+				elif not was_unsuspended:
+					untouched_count += 1
 			else:
 				note = col.new_note(model)
 				note.guid = guid
@@ -682,7 +687,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				col.add_note(note, deck_id)
 				added_count += 1
 		
-		log.info("Finished notes sync. Added: %d, Updated: %d, Suspended: %d, Unsuspended: %d", added_count, updated_count, suspended_count, unsuspended_count)
+		log.info("Finished notes sync. Added: %d, Updated: %d, Suspended: %d, Unsuspended: %d, Untouched: %d", added_count, updated_count, suspended_count, unsuspended_count, untouched_count)
 
 		# Cleanup orphaned media files (zh_*.mp3 no longer in the active Notion rows)
 		log.info("Checking for orphaned media files…")
