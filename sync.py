@@ -587,12 +587,18 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 						row["chinese"] + "\x1f%"
 					)
 				if note_ids:
-					log.info("Suspending excluded note '%s' (guid: %s, ids: %s)", row["chinese"], guid, note_ids)
-					try:
-						col.sched.suspend_notes(note_ids)
-						suspended_count += len(note_ids)
-					except Exception as susp_exc:
-						log.error("Failed to suspend note '%s': %s", row["chinese"], susp_exc)
+					# Check if there are cards of these notes that are not currently suspended (queue != -1)
+					unsuspended_card_ids = col.db.list(
+						f"select id from cards where nid in ({','.join(['?'] * len(note_ids))}) and queue != -1",
+						*note_ids
+					)
+					if unsuspended_card_ids:
+						log.info("Suspending excluded note '%s' (guid: %s, ids: %s)", row["chinese"], guid, note_ids)
+						try:
+							col.sched.suspend_notes(note_ids)
+							suspended_count += len(note_ids)
+						except Exception as susp_exc:
+							log.error("Failed to suspend note '%s': %s", row["chinese"], susp_exc)
 				continue
 
 			audio_filename = f"zh_{row['id']}.mp3"
