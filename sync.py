@@ -631,10 +631,15 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			
 			if note_ids:
 				try:
-					card_ids = col.db.list("select id from cards where nid = ?", note_ids[0])
-					if card_ids:
-						col.sched.unsuspend_cards(card_ids)
-						unsuspended_count += len(card_ids)
+					# Get only cards of this note that are currently suspended (queue = -1)
+					suspended_card_ids = col.db.list(
+						"select id from cards where nid = ? and queue = -1",
+						note_ids[0]
+					)
+					if suspended_card_ids:
+						log.info("Unsuspending note '%s' cards: %s", row["chinese"], suspended_card_ids)
+						col.sched.unsuspend_cards(suspended_card_ids)
+						unsuspended_count += len(suspended_card_ids)
 				except Exception as unsusp_exc:
 					log.error("Failed to unsuspend note '%s': %s", row["chinese"], unsusp_exc)
 
