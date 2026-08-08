@@ -105,25 +105,36 @@ def fetch_notion_pages() -> list[dict]:
 
 # ── Notion field extractors ────────────────────────────────────────────────────
 
-def _rich_text(prop: dict) -> str:
+def _rich_text(prop: dict | None) -> str:
+	if not prop:
+		return ""
 	return "".join(t["plain_text"] for t in prop.get("rich_text", []))
 
 
-def _title(prop: dict) -> str:
+def _title(prop: dict | None) -> str:
+	if not prop:
+		return ""
 	return "".join(t["plain_text"] for t in prop.get("title", []))
 
 
-def _select(prop: dict) -> str:
+def _select(prop: dict | None) -> str:
+	if not prop:
+		return ""
 	sel = prop.get("select")
 	return sel["name"] if sel else ""
 
 
-def _checkbox(prop: dict) -> bool:
+def _checkbox(prop: dict | None) -> bool:
+	if not prop:
+		return False
 	return bool(prop.get("checkbox", False))
 
 
-def _multi_select(prop: dict) -> list[str]:
+def _multi_select(prop: dict | None) -> list[str]:
+	if not prop:
+		return []
 	return [o["name"] for o in prop.get("multi_select", [])]
+
 
 
 def parse_row(page: dict) -> dict | None:
@@ -145,8 +156,11 @@ def parse_row(page: dict) -> dict | None:
 		log.debug("Skipping page %s: empty word field", page["id"])
 		return None
 
-	# Skip rows where Ready checkbox exists but is unchecked
-	if "Ready" in props and not _checkbox(props["Ready"]):
+	# Check for Exclude checkbox
+	exclude = "Exclude" in props and _checkbox(props["Exclude"])
+
+	# Skip rows where Ready checkbox exists but is unchecked, except if it is excluded (which we want to process for removal)
+	if not exclude and "Ready" in props and not _checkbox(props["Ready"]):
 		log.debug("Skipping '%s': Ready=false", chinese)
 		return None
 
@@ -161,6 +175,7 @@ def parse_row(page: dict) -> dict | None:
 		"type":    _select(   props.get("Type",    {})).strip(),
 		"notes":   _rich_text(props.get("Notes",   {})).strip(),
 		"tags":    _multi_select(props.get("Tags", {})),
+		"exclude": exclude,
 	}
 
 
@@ -185,27 +200,138 @@ hr         { border: none; border-top: 1px solid #ddd; margin: 14px 0; }
 
 _COLORIZER_SCRIPT = """
 <script>
-(function() {
-	var els = document.querySelectorAll('.pinyin');
-	var tone1 = /[āēīōūǖ]/i;
-	var tone2 = /[áéíóúǘ]/i;
-	var tone3 = /[ǎěǐǒǔǚ]/i;
-	var tone4 = /[àèìòùǜ]/i;
-	var regex = /([bcdfghjklmnpqrstwxyz]?[h]?[aeiouvüāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜvü]{1,3}(?:ng|n|r)?)/gi;
+(function(){
+var pEls=document.querySelectorAll('.pinyin');
+if(!pEls.length)return;
+var chEl=document.querySelector('.chinese');
 
-	els.forEach(function(el) {
-		if (el.dataset.colorized) return;
-		var text = el.innerHTML;
-		el.innerHTML = text.replace(regex, function(syllable) {
-			var tone = 5;
-			if (tone1.test(syllable)) tone = 1;
-			else if (tone2.test(syllable)) tone = 2;
-			else if (tone3.test(syllable)) tone = 3;
-			else if (tone4.test(syllable)) tone = 4;
-			return '<span class="tone' + tone + '">' + syllable + '</span>';
+/* Tone detection: char → tone number */
+var TM={};
+'āēīōūǖ'.split('').forEach(function(c){TM[c]=1;});
+'áéíóúǘ'.split('').forEach(function(c){TM[c]=2;});
+'ǎěǐǒǔǚ'.split('').forEach(function(c){TM[c]=3;});
+'àèìòùǜ'.split('').forEach(function(c){TM[c]=4;});
+
+/* Normalize tone-marked vowels → base vowels for syllable lookup */
+var NM={};
+'āáǎà'.split('').forEach(function(c){NM[c]='a';});
+'ēéěè'.split('').forEach(function(c){NM[c]='e';});
+'īíǐì'.split('').forEach(function(c){NM[c]='i';});
+'ōóǒò'.split('').forEach(function(c){NM[c]='o';});
+'ūúǔù'.split('').forEach(function(c){NM[c]='u';});
+'ǖǘǚǜ'.split('').forEach(function(c){NM[c]='ü';});
+
+function norm(s){
+	var r='';for(var i=0;i<s.length;i++)r+=NM[s[i]]||s[i];
+	return r.toLowerCase();
+}
+function tone(s){
+	for(var i=0;i<s.length;i++)if(TM[s[i]])return TM[s[i]];
+	return 5;
+}
+function isHz(c){
+	var x=c.charCodeAt(0);
+	return(x>=0x4E00&&x<=0x9FFF)||(x>=0x3400&&x<=0x4DBF)||(x>=0xF900&&x<=0xFAFF);
+}
+function countHz(s){var n=0;for(var i=0;i<s.length;i++)if(isHz(s[i]))n++;return n;}
+function isPy(c){
+	var x=c.charCodeAt(0);
+	return(x>=65&&x<=90)||(x>=97&&x<=122)||!!NM[c]||c==='ü';
+}
+
+/* Complete valid pinyin syllable table (~410 syllables) */
+var SY=new Set(('a,o,e,ai,ei,ao,ou,an,en,ang,eng,er,'+
+'ba,bo,bi,bu,bai,bei,bao,ban,ben,bang,beng,bian,biao,bie,bin,bing,'+
+'pa,po,pi,pu,pai,pei,pao,pou,pan,pen,pang,peng,pian,piao,pie,pin,ping,'+
+'ma,mo,me,mi,mu,mai,mei,mao,mou,man,men,mang,meng,mian,miao,mie,min,ming,miu,'+
+'fa,fo,fu,fei,fan,fen,fang,feng,fou,'+
+'da,de,di,du,dai,dei,dao,dou,dan,den,dang,deng,dong,dia,dian,diao,die,diu,ding,duan,dui,dun,duo,'+
+'ta,te,ti,tu,tai,tei,tao,tou,tan,tang,teng,tong,tian,tiao,tie,ting,tuan,tui,tun,tuo,'+
+'na,ne,ni,nu,nü,nai,nei,nao,nou,nan,nen,nang,neng,nong,nia,nian,niang,niao,nie,nin,ning,niu,nuan,nuo,nüe,'+
+'la,le,li,lu,lü,lai,lei,lao,lou,lan,lang,leng,long,lia,lian,liang,liao,lie,lin,ling,liu,luan,lun,luo,lüe,'+
+'ga,ge,gu,gai,gei,gao,gou,gan,gen,gang,geng,gong,gua,guai,guan,guang,gui,gun,guo,'+
+'ka,ke,ku,kai,kei,kao,kou,kan,ken,kang,keng,kong,kua,kuai,kuan,kuang,kui,kun,kuo,'+
+'ha,he,hu,hai,hei,hao,hou,han,hen,hang,heng,hong,hua,huai,huan,huang,hui,hun,huo,'+
+'ji,ju,jia,jian,jiang,jiao,jie,jin,jing,jiong,jiu,juan,jue,jun,'+
+'qi,qu,qia,qian,qiang,qiao,qie,qin,qing,qiong,qiu,quan,que,qun,'+
+'xi,xu,xia,xian,xiang,xiao,xie,xin,xing,xiong,xiu,xuan,xue,xun,'+
+'zha,zhe,zhi,zhu,zhai,zhei,zhao,zhou,zhan,zhen,zhang,zheng,zhong,zhua,zhuai,zhuan,zhuang,zhui,zhun,zhuo,'+
+'cha,che,chi,chu,chai,chao,chou,chan,chen,chang,cheng,chong,chuai,chuan,chuang,chui,chun,chuo,'+
+'sha,she,shi,shu,shai,shei,shao,shou,shan,shen,shang,sheng,shua,shuai,shuan,shuang,shui,shun,shuo,'+
+'ri,ru,re,rao,rou,ran,ren,rang,reng,rong,ruan,rui,run,ruo,'+
+'za,ze,zi,zu,zai,zei,zao,zou,zan,zen,zang,zeng,zong,zuan,zui,zun,zuo,'+
+'ca,ce,ci,cu,cai,cao,cou,can,cen,cang,ceng,cong,cuan,cui,cun,cuo,'+
+'sa,se,si,su,sai,sao,sou,san,sen,sang,seng,song,suan,sui,sun,suo,'+
+'ya,yo,ye,yi,yu,yao,you,yan,yin,yang,ying,yong,yuan,yue,yun,'+
+'wa,wo,wu,wai,wei,wan,wen,wang,weng').split(','));
+
+/*
+ * Segment normalized pinyin into exactly n syllables via backtracking.
+ * Scores by fewest vowel-initial syllables (consonant-initial preferred).
+ * Returns best split positions [[start,end],...] or null.
+ */
+function seg(s,n){
+	var best=null;
+	(function bt(pos,sp){
+		if(sp.length===n){
+			if(pos===s.length){
+				var vi=0;
+				for(var i=0;i<sp.length;i++)
+					if('aeiouü'.indexOf(s.charAt(sp[i][0]))>=0)vi++;
+				if(!best||vi<best.v)best={s:sp.map(function(x){return x.slice();}),v:vi};
+			}
+			return;
+		}
+		var rem=n-sp.length,left=s.length-pos;
+		if(left<rem||left>rem*6)return;
+		for(var len=Math.min(6,left);len>=1;len--){
+			if(SY.has(s.substring(pos,pos+len))){
+				sp.push([pos,pos+len]);
+				bt(pos+len,sp);
+				sp.pop();
+				if(best&&best.v===0)return;
+			}
+		}
+	})(0,[]);
+	return best?best.s:null;
+}
+
+var hzN=chEl?countHz(chEl.textContent):0;
+
+pEls.forEach(function(el){
+	if(el.dataset.colorized)return;
+	var raw=el.textContent;
+	if(!raw.trim()){el.dataset.colorized='true';return;}
+
+	/* Strip non-pinyin chars, build original-position map */
+	var stripped='',posMap=[];
+	for(var i=0;i<raw.length;i++){
+		if(isPy(raw[i])){posMap.push(i);stripped+=raw[i];}
+	}
+
+	var normed=norm(stripped);
+	var splits=hzN>0?seg(normed,hzN):null;
+
+	if(splits){
+		var html='',last=0;
+		for(var i=0;i<splits.length;i++){
+			var oS=posMap[splits[i][0]];
+			var oE=posMap[splits[i][1]-1]+1;
+			if(oS>last)html+=raw.substring(last,oS);
+			var syl=raw.substring(oS,oE);
+			html+='<span class="tone'+tone(syl)+'">'+syl+'</span>';
+			last=oE;
+		}
+		if(last<raw.length)html+=raw.substring(last);
+		el.innerHTML=html;
+	} else {
+		/* Fallback: color each whitespace-separated token by its tone mark */
+		el.innerHTML=raw.replace(/\\S+/g,function(w){
+			return '<span class="tone'+tone(w)+'">'+w+'</span>';
 		});
-		el.dataset.colorized = 'true';
-	});
+	}
+	el.dataset.colorized='true';
+});
 })();
 </script>
 """
@@ -213,6 +339,7 @@ _COLORIZER_SCRIPT = """
 def _make_model() -> genanki.Model:
 	audio_front = "{{Audio}}" if AUDIO_PLACEMENT in ("front", "both") else ""
 	audio_back = "{{Audio}}" if AUDIO_PLACEMENT in ("back", "both") else ""
+	audio_back_production = "{{Audio}}" if AUDIO_PLACEMENT in ("front", "back", "both") else ""
 
 	return genanki.Model(
 		MODEL_ID,
@@ -243,13 +370,13 @@ def _make_model() -> genanki.Model:
 			{
 				# Production: see the meaning → recall the character
 				"name": "Production",
-				"qfmt": f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}",
+				"qfmt": "{{#Meaning}}<div class='meaning'>{{Meaning}}</div>{{/Meaning}}",
 				"afmt": (
 					"{{FrontSide}}<hr>"
 					"<div class='chinese'>{{Chinese}}</div>"
 					"<div class='pinyin'>{{Pinyin}}</div>"
 					"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
-					f"{audio_back}"
+					f"{audio_back_production}"
 					f"{_COLORIZER_SCRIPT}"
 				),
 			},
@@ -268,6 +395,8 @@ def build_deck(rows: list[dict]) -> genanki.Deck:
 	deck  = genanki.Deck(DECK_ID, DECK_NAME)
 
 	for row in rows:
+		if row.get("exclude"):
+			continue
 		note = genanki.Note(
 			model=model,
 			fields=[
@@ -355,6 +484,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 
 		audio_front = "{{Audio}}" if AUDIO_PLACEMENT in ("front", "both") else ""
 		audio_back = "{{Audio}}" if AUDIO_PLACEMENT in ("back", "both") else ""
+		audio_back_production = "{{Audio}}" if AUDIO_PLACEMENT in ("front", "back", "both") else ""
 
 		# Get or create note model
 		model = col.models.by_name(MODEL_NAME)
@@ -379,13 +509,13 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			col.models.add_template(model, t1)
 
 			t2 = col.models.new_template("Production")
-			t2["qfmt"] = f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}"
+			t2["qfmt"] = "{{#Meaning}}<div class='meaning'>{{Meaning}}</div>{{/Meaning}}"
 			t2["afmt"] = (
 				"{{FrontSide}}<hr>"
 				"<div class='chinese'>{{Chinese}}</div>"
 				"<div class='pinyin'>{{Pinyin}}</div>"
 				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
-				f"{audio_back}"
+				f"{audio_back_production}"
 				f"{_COLORIZER_SCRIPT}"
 			)
 			col.models.add_template(model, t2)
@@ -416,13 +546,13 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			)
 			
 			t2 = model["tmpls"][1]
-			t2["qfmt"] = f"<div class='meaning'>{{{{Meaning}}}}</div>{audio_front}"
+			t2["qfmt"] = "{{#Meaning}}<div class='meaning'>{{Meaning}}</div>{{/Meaning}}"
 			t2["afmt"] = (
 				"{{FrontSide}}<hr>"
 				"<div class='chinese'>{{Chinese}}</div>"
 				"<div class='pinyin'>{{Pinyin}}</div>"
 				"{{#Notes}}<div class='notes'>{{Notes}}</div>{{/Notes}}"
-				f"{audio_back}"
+				f"{audio_back_production}"
 				f"{_COLORIZER_SCRIPT}"
 			)
 			model["css"] = _CSS
@@ -442,9 +572,28 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 		log.info("Adding/updating %d notes directly in collection…", len(rows))
 		added_count = 0
 		updated_count = 0
+		suspended_count = 0
+		unsuspended_count = 0
 		for row in rows:
 			guid = _stable_guid(row["id"])
 			
+			if row.get("exclude"):
+				note_ids = col.db.list("select id from notes where guid = ?", guid)
+				if not note_ids:
+					note_ids = col.db.list(
+						"select id from notes where flds = ? or flds like ?",
+						row["chinese"],
+						row["chinese"] + "\x1f%"
+					)
+				if note_ids:
+					log.info("Suspending excluded note '%s' (guid: %s, ids: %s)", row["chinese"], guid, note_ids)
+					try:
+						col.sched.suspend_notes(note_ids)
+						suspended_count += len(note_ids)
+					except Exception as susp_exc:
+						log.error("Failed to suspend note '%s': %s", row["chinese"], susp_exc)
+				continue
+
 			audio_filename = f"zh_{row['id']}.mp3"
 			audio_path = media_dir / audio_filename
 
@@ -480,6 +629,15 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 					old_note.guid = guid
 					col.update_note(old_note)
 			
+			if note_ids:
+				try:
+					card_ids = col.db.list("select id from cards where nid = ?", note_ids[0])
+					if card_ids:
+						col.sched.unsuspend_cards(card_ids)
+						unsuspended_count += len(card_ids)
+				except Exception as unsusp_exc:
+					log.error("Failed to unsuspend note '%s': %s", row["chinese"], unsusp_exc)
+
 			fields = [
 				row["chinese"],
 				row["pinyin"],
@@ -519,7 +677,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				col.add_note(note, deck_id)
 				added_count += 1
 		
-		log.info("Finished notes sync. Added: %d, Updated: %d", added_count, updated_count)
+		log.info("Finished notes sync. Added: %d, Updated: %d, Suspended: %d, Unsuspended: %d", added_count, updated_count, suspended_count, unsuspended_count)
 
 		# Cleanup orphaned media files (zh_*.mp3 no longer in the active Notion rows)
 		log.info("Checking for orphaned media files…")
