@@ -1,7 +1,10 @@
 import hashlib
 from pathlib import Path
 import genanki
-from config import MODEL_ID, MODEL_NAME, AUDIO_PLACEMENT, DECK_ID, DECK_NAME
+from config import (
+	MODEL_ID, MODEL_NAME, AUDIO_PLACEMENT, DECK_ID, DECK_NAME,
+	DECK_ID_NORMAL, DECK_NAME_NORMAL, DECK_ID_CONV, DECK_NAME_CONV
+)
 
 _CSS = """
 .card      { font-family: Arial, sans-serif; font-size: 20px; text-align: center;
@@ -72,9 +75,10 @@ def _make_model() -> genanki.Model:
 def _stable_guid(notion_id: str) -> str:
 	return genanki.guid_for(notion_id)
 
-def build_deck(rows: list[dict]) -> genanki.Deck:
-	"""Build a genanki.Deck structure from Notion parsed rows."""
-	deck = genanki.Deck(DECK_ID, DECK_NAME)
+def build_deck(rows: list[dict]) -> list[genanki.Deck]:
+	"""Build normal and conversation genanki.Decks from Notion parsed rows."""
+	deck_normal = genanki.Deck(DECK_ID_NORMAL, DECK_NAME_NORMAL)
+	deck_conv = genanki.Deck(DECK_ID_CONV, DECK_NAME_CONV)
 	model = _make_model()
 
 	for row in rows:
@@ -94,6 +98,9 @@ def build_deck(rows: list[dict]) -> genanki.Deck:
 			guid=_stable_guid(row["id"]),
 			tags=row["tags"],
 		)
-		deck.add_note(note)
+		if row.get("conversation"):
+			deck_conv.add_note(note)
+		else:
+			deck_normal.add_note(note)
 
-	return deck
+	return [deck_normal, deck_conv]

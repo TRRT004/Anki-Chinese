@@ -55,8 +55,9 @@ def run_once() -> None:
 			
 	log.info("Parsed %d valid rows, skipped %d", len(rows), len(pages) - len(rows))
 	
-	deck = build_deck(rows)
-	log.info("Deck built: %d notes", len(deck.notes))
+	decks = build_deck(rows)
+	total_notes = sum(len(d.notes) for d in decks)
+	log.info("Decks built: %d decks, %d total notes", len(decks), total_notes)
 	
 	# Generate .apkg
 	out_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
@@ -66,7 +67,7 @@ def run_once() -> None:
 	filename = f"ChineseVocab_{today_str}.apkg"
 	out_path = out_dir / filename
 	
-	genanki.Package(deck).write_to_file(str(out_path.resolve()))
+	genanki.Package(decks).write_to_file(str(out_path.resolve()))
 	log.info("Wrote deck: %s (%d bytes)", out_path, out_path.stat().st_size)
 	
 	urls = upload_apkg(out_path, filename, rows)

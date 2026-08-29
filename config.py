@@ -29,8 +29,12 @@ ANKI_COLLECTION_PATH    = os.getenv("ANKI_COLLECTION_PATH", "./collection")
 
 NOTION_VERSION  = "2022-06-28"
 DECK_NAME       = "ChineseVocab"
+DECK_NAME_NORMAL = f"{DECK_NAME}::Normal"
+DECK_NAME_CONV   = f"{DECK_NAME}::Conversation"
 MODEL_NAME      = "ChineseVocabModel"
 AUDIO_PLACEMENT = os.getenv("AUDIO_PLACEMENT", "both").lower()
 
 MODEL_ID = int(hashlib.md5(MODEL_NAME.encode()).hexdigest()[:8], 16)
 DECK_ID  = int(hashlib.md5(DECK_NAME.encode()).hexdigest()[:8], 16)
+DECK_ID_NORMAL = int(hashlib.md5(DECK_NAME_NORMAL.encode()).hexdigest()[:8], 16)
+DECK_ID_CONV   = int(hashlib.md5(DECK_NAME_CONV.encode()).hexdigest()[:8], 16)

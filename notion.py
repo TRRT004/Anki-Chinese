@@ -85,6 +85,9 @@ def parse_row(page: dict) -> dict | None:
 	# Check for Exclude checkbox
 	exclude = "Exclude" in props and _checkbox(props["Exclude"])
 
+	# Check for Conversation checkbox
+	conversation = "Conversation" in props and _checkbox(props["Conversation"])
+
 	# Skip rows where Ready checkbox exists but is unchecked, except if it is excluded (which we want to process for removal)
 	if not exclude and "Ready" in props and not _checkbox(props["Ready"]):
 		log.debug("Skipping '%s': Ready=false", chinese)
@@ -102,4 +105,5 @@ def parse_row(page: dict) -> dict | None:
 		"notes":   _rich_text(props.get("Notes",   {})).strip(),
 		"tags":    _multi_select(props.get("Tags", {})),
 		"exclude": exclude,
+		"conversation": conversation,
 	}

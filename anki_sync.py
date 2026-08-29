@@ -6,7 +6,8 @@ from pathlib import Path
 import edge_tts
 from config import (
 	ANKIWEB_USERNAME, ANKIWEB_PASSWORD, ANKI_COLLECTION_PATH,
-	AUDIO_PLACEMENT, MODEL_NAME, MODEL_ID, DECK_NAME
+	AUDIO_PLACEMENT, MODEL_NAME, MODEL_ID, DECK_NAME,
+	DECK_NAME_NORMAL, DECK_NAME_CONV, DECK_ID_NORMAL, DECK_ID_CONV
 )
 from anki_deck import _stable_guid, _make_model, _CSS, _COLORIZER_SCRIPT
 
@@ -136,8 +137,9 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 			model["css"] = _CSS
 			col.models.save(model)
 
-		# Ensure deck exists
-		deck_id = col.decks.id(DECK_NAME)
+		# Ensure decks exist
+		deck_id_normal = col.decks.id(DECK_NAME_NORMAL)
+		deck_id_conv = col.decks.id(DECK_NAME_CONV)
 
 		# Ensure media folder exists
 		media_dir = col_dir / "collection.media"
@@ -239,6 +241,8 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				f"[sound:{audio_filename}]",
 			]
 			
+			target_deck_id = deck_id_conv if row.get("conversation") else deck_id_normal
+
 			if note_ids:
 				note = col.get_note(note_ids[0])
 				# Ensure fields array is padded to schema size
@@ -257,8 +261,25 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 					note.tags = new_tags
 					changed = True
 				
+				# Check if any cards are in the wrong deck and move them if so
+				cards_in_wrong_deck = col.db.list(
+					"select id from cards where nid = ? and did != ?",
+					note_ids[0],
+					target_deck_id
+				)
+				deck_changed = False
+				if cards_in_wrong_deck:
+					log.info("Moving cards %s of note '%s' to deck ID %d", cards_in_wrong_deck, row["chinese"], target_deck_id)
+					try:
+						col.set_deck(cards_in_wrong_deck, target_deck_id)
+						deck_changed = True
+					except Exception as move_exc:
+						log.error("Failed to move cards for note '%s' to deck %d: %s", row["chinese"], target_deck_id, move_exc)
+
 				if changed:
 					col.update_note(note)
+
+				if changed or deck_changed:
 					updated_count += 1
 				elif not was_unsuspended:
 					untouched_count += 1
@@ -268,7 +289,7 @@ def upload_ankiweb(file_path: Path, filename: str, rows: list[dict]) -> str | No
 				for i, val in enumerate(fields):
 					note.fields[i] = val
 				note.tags = row["tags"]
-				col.add_note(note, deck_id)
+				col.add_note(note, target_deck_id)
 				added_count += 1
 		
 		log.info("Finished notes sync. Added: %d, Updated: %d, Suspended: %d, Unsuspended: %d, Untouched: %d", added_count, updated_count, suspended_count, unsuspended_count, untouched_count)
