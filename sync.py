@@ -1,4 +1,3 @@
-import os
 import sys
 import time
 import signal
@@ -6,7 +5,7 @@ import logging
 from datetime import date, datetime
 from pathlib import Path
 
-from config import UPLOAD_BACKENDS
+from config import UPLOAD_BACKENDS, RUN_AS_DAEMON, OUTPUT_DIR
 from notion import fetch_notion_pages, parse_row
 from anki_deck import build_deck
 from anki_sync import upload_ankiweb, get_anki_day_cutoff
@@ -60,7 +59,7 @@ def run_once() -> None:
 	log.info("Decks built: %d decks, %d total notes", len(decks), total_notes)
 	
 	# Generate .apkg
-	out_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
+	out_dir = Path(OUTPUT_DIR)
 	out_dir.mkdir(parents=True, exist_ok=True)
 	
 	today_str = date.today().isoformat()
@@ -137,7 +136,7 @@ def run_daemon() -> None:
 		time.sleep(sleep_seconds)
 
 def main() -> None:
-	if os.getenv("RUN_AS_DAEMON", "").lower() == "true":
+	if RUN_AS_DAEMON:
 		run_daemon()
 	else:
 		run_once()

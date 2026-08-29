@@ -33,6 +33,8 @@ DECK_NAME_NORMAL = f"{DECK_NAME}::Normal"
 DECK_NAME_CONV   = f"{DECK_NAME}::Conversation"
 MODEL_NAME      = "ChineseVocabModel"
 AUDIO_PLACEMENT = os.getenv("AUDIO_PLACEMENT", "both").lower()
+RUN_AS_DAEMON   = os.getenv("RUN_AS_DAEMON", "false").lower() == "true"
+OUTPUT_DIR      = os.getenv("OUTPUT_DIR", "./output")
 
 MODEL_ID = int(hashlib.md5(MODEL_NAME.encode()).hexdigest()[:8], 16)
 DECK_ID  = int(hashlib.md5(DECK_NAME.encode()).hexdigest()[:8], 16)
